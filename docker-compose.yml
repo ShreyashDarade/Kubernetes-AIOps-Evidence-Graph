@@ -1,0 +1,284 @@
+services:
+  # ========================================
+  # Core Databases
+  # ========================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiops-postgres
+    environment:
+      POSTGRES_DB: aiops
+      POSTGRES_USER: aiops
+      POSTGRES_PASSWORD: aiops_secure_password_change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aiops-network
+
+  neo4j:
+    image: neo4j:5.16.0-community
+    container_name: aiops-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/neo4j_secure_password_change_me
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aiops-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: aiops-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aiops-network
+
+  # ========================================
+  # Temporal Workflow Engine
+  # ========================================
+
+  temporal:
+    image: temporalio/auto-setup:1.22.4
+    container_name: aiops-temporal
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=aiops
+      - POSTGRES_PWD=aiops_secure_password_change_me
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development.yaml
+    ports:
+      - "7233:7233"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config/temporal:/etc/temporal/config/dynamicconfig
+    networks:
+      - aiops-network
+
+  temporal-ui:
+    image: temporalio/ui:2.22.1
+    container_name: aiops-temporal-ui
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8088:8080"
+    depends_on:
+      - temporal
+    networks:
+      - aiops-network
+
+  # ========================================
+  # Observability Stack
+  # ========================================
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: aiops-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+      - "--web.enable-remote-write-receiver"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./observability/prometheus/rules:/etc/prometheus/rules
+      - prometheus_data:/prometheus
+    networks:
+      - aiops-network
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: aiops-alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager_data:/alertmanager
+    networks:
+      - aiops-network
+
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: aiops-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./observability/loki/loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    networks:
+      - aiops-network
+
+  tempo:
+    image: grafana/tempo:2.3.1
+    container_name: aiops-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    ports:
+      - "3200:3200" # Tempo
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml
+      - tempo_data:/tmp/tempo
+    networks:
+      - aiops-network
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: aiops-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks:
+      - aiops-network
+
+  # ========================================
+  # Policy Engine
+  # ========================================
+
+  opa:
+    image: openpolicyagent/opa:0.61.0
+    container_name: aiops-opa
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=info"
+      - "/policies"
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./src/services/policy/policies:/policies
+    networks:
+      - aiops-network
+
+  # ========================================
+  # AIOps Platform Services
+  # ========================================
+
+  aiops-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aiops-api
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=development
+      - DATABASE_URL=postgresql+asyncpg://aiops:aiops_secure_password_change_me@postgres:5432/aiops
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=neo4j_secure_password_change_me
+      - REDIS_URL=redis://redis:6379/0
+      - TEMPORAL_HOST=temporal
+      - TEMPORAL_PORT=7233
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOKI_URL=http://loki:3100
+      - OPA_URL=http://opa:8181
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    networks:
+      - aiops-network
+
+  aiops-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aiops-worker
+    command: python -m src.services.workflow.worker
+    environment:
+      - APP_ENV=development
+      - DATABASE_URL=postgresql+asyncpg://aiops:aiops_secure_password_change_me@postgres:5432/aiops
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=neo4j_secure_password_change_me
+      - REDIS_URL=redis://redis:6379/0
+      - TEMPORAL_HOST=temporal
+      - TEMPORAL_PORT=7233
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOKI_URL=http://loki:3100
+      - OPA_URL=http://opa:8181
+    volumes:
+      - ./src:/app/src
+      - ~/.kube:/root/.kube:ro
+    depends_on:
+      - aiops-api
+      - temporal
+    networks:
+      - aiops-network
+
+networks:
+  aiops-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  neo4j_logs:
+  redis_data:
+  prometheus_data:
+  alertmanager_data:
+  loki_data:
+  tempo_data:
+  grafana_data:

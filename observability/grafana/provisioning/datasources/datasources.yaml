@@ -1,0 +1,50 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      httpMethod: GET
+      tracesToLogs:
+        datasourceUid: loki
+        tags: ["job", "namespace", "pod"]
+        mappedTags: [{ key: "service.name", value: "service" }]
+        mapTagNamesEnabled: true
+        spanStartTimeShift: "1h"
+        spanEndTimeShift: "1h"
+        filterByTraceID: true
+        filterBySpanID: false
+      serviceMap:
+        datasourceUid: "prometheus"
+      nodeGraph:
+        enabled: true
+      lokiSearch:
+        datasourceUid: "loki"
+
+  - name: Neo4j
+    type: hadesarchitect-neo4j-datasource
+    access: proxy
+    url: bolt://neo4j:7687
+    editable: false
+    jsonData:
+      database: neo4j
+    secureJsonData:
+      password: neo4j_secure_password_change_me

@@ -1,0 +1,13 @@
+frontend.dynamicConfigClient:
+  - value:
+      system:
+        numArchiveQueueShards: 1
+        numHistoryShards: 1
+    constraints: {}
+history.defaultActivityRetryPolicy:
+  - value:
+      InitialIntervalInSeconds: 1
+      MaximumIntervalCoefficient: 100
+      BackoffCoefficient: 2
+      MaximumAttempts: 3
+    constraints: {}

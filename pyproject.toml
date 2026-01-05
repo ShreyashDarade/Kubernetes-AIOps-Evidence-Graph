@@ -1,0 +1,98 @@
+[project]
+name = "kubernetes-aiops-evidence-graph"
+version = "1.0.0"
+description = "Production-ready Kubernetes AIOps platform with Evidence Graph for automated incident detection, RCA, and remediation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "AIOps Team" }]
+
+dependencies = [
+    # FastAPI & Web
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "python-multipart>=0.0.6",
+    "httpx>=0.26.0",
+    
+    # Database
+    "sqlalchemy>=2.0.25",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "neo4j>=5.16.0",
+    "redis>=5.0.0",
+    
+    # Temporal Workflow
+    "temporalio>=1.4.0",
+    
+    # Kubernetes
+    "kubernetes>=28.1.0",
+    
+    # Observability
+    "opentelemetry-api>=1.22.0",
+    "opentelemetry-sdk>=1.22.0",
+    "opentelemetry-exporter-otlp>=1.22.0",
+    "opentelemetry-instrumentation-fastapi>=0.43b0",
+    "prometheus-client>=0.19.0",
+    
+    # LLM Integration
+    "openai>=1.10.0",
+    "google-generativeai>=0.3.0",
+    
+    # Policy Engine
+    "opa-python-client>=1.3.0",
+    
+    # Logging & Metrics Clients
+    "python-json-logger>=2.0.7",
+    
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.1",
+    "jinja2>=3.1.3",
+    "tenacity>=8.2.3",
+    "structlog>=24.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "black>=24.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.6.0",
+]
+
+slack = [
+    "slack-sdk>=3.26.0",
+]
+
+jira = [
+    "jira>=3.6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"

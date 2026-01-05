@@ -1,0 +1,184 @@
+# PromQL Queries Library for Evidence Collection
+# Organized by incident type / category
+
+crashloop:
+  - name: "restart_count"
+    query: 'increase(kube_pod_container_status_restarts_total{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}[30m])'
+    description: "Container restart count in last 30 minutes"
+
+  - name: "waiting_reason"
+    query: 'kube_pod_container_status_waiting_reason{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}'
+    description: "Reason why container is waiting"
+
+  - name: "last_terminated_reason"
+    query: 'kube_pod_container_status_last_terminated_reason{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}'
+    description: "Last termination reason"
+
+  - name: "container_exit_code"
+    query: 'kube_pod_container_status_last_terminated_exitcode{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}'
+    description: "Container exit code on termination"
+
+oom:
+  - name: "memory_usage_percentage"
+    query: '(container_memory_usage_bytes{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"} / container_spec_memory_limit_bytes{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}) * 100'
+    description: "Memory usage as percentage of limit"
+
+  - name: "oom_killed_total"
+    query: 'kube_pod_container_status_last_terminated_reason{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*", reason="OOMKilled"}'
+    description: "OOMKilled events"
+
+  - name: "memory_working_set"
+    query: 'container_memory_working_set_bytes{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}'
+    description: "Working set memory (actively used)"
+
+  - name: "memory_rss"
+    query: 'container_memory_rss{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}'
+    description: "Resident set size memory"
+
+  - name: "memory_limit"
+    query: 'container_spec_memory_limit_bytes{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}'
+    description: "Container memory limit"
+
+error_rate:
+  - name: "http_5xx_rate"
+    query: 'sum(rate(http_requests_total{namespace="{{namespace}}", status=~"5.."}[5m])) by (service) / sum(rate(http_requests_total{namespace="{{namespace}}"}[5m])) by (service)'
+    description: "5xx error rate by service"
+
+  - name: "http_error_by_endpoint"
+    query: 'topk(10, sum by (path, method) (rate(http_requests_total{namespace="{{namespace}}", status=~"5.."}[5m])))'
+    description: "Top 10 error endpoints"
+
+  - name: "grpc_error_rate"
+    query: 'sum(rate(grpc_server_handled_total{namespace="{{namespace}}", grpc_code!="OK"}[5m])) / sum(rate(grpc_server_handled_total{namespace="{{namespace}}"}[5m]))'
+    description: "gRPC error rate"
+
+  - name: "error_rate_increase"
+    query: 'increase(http_requests_total{namespace="{{namespace}}", status=~"5.."}[15m])'
+    description: "Error count increase in last 15 minutes"
+
+latency:
+  - name: "p99_latency"
+    query: 'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="{{namespace}}"}[5m])) by (le, service))'
+    description: "P99 request latency by service"
+
+  - name: "p95_latency"
+    query: 'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="{{namespace}}"}[5m])) by (le, service))'
+    description: "P95 request latency"
+
+  - name: "p50_latency"
+    query: 'histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{namespace="{{namespace}}"}[5m])) by (le, service))'
+    description: "P50 (median) request latency"
+
+  - name: "latency_by_endpoint"
+    query: 'topk(10, histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace="{{namespace}}"}[5m])) by (le, path)))'
+    description: "Top 10 slowest endpoints"
+
+resource:
+  - name: "cpu_usage_percentage"
+    query: '(sum(rate(container_cpu_usage_seconds_total{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}[5m])) / sum(kube_pod_container_resource_limits{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*", resource="cpu"})) * 100'
+    description: "CPU usage as percentage of limit"
+
+  - name: "cpu_throttling"
+    query: 'sum(rate(container_cpu_cfs_throttled_seconds_total{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}[5m])) by (pod)'
+    description: "CPU throttling per pod"
+
+  - name: "cpu_throttled_periods"
+    query: 'sum(rate(container_cpu_cfs_throttled_periods_total{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace="{{namespace}}", pod=~"{{pod_prefix}}.*"}[5m]))'
+    description: "Percentage of throttled CPU periods"
+
+  - name: "disk_usage"
+    query: 'kubelet_volume_stats_used_bytes{namespace="{{namespace}}"} / kubelet_volume_stats_capacity_bytes{namespace="{{namespace}}"}'
+    description: "PVC disk usage percentage"
+
+node:
+  - name: "node_conditions"
+    query: 'kube_node_status_condition{condition!="Ready", status="true"}'
+    description: "Unhealthy node conditions"
+
+  - name: "node_not_ready"
+    query: 'kube_node_status_condition{condition="Ready", status="false"}'
+    description: "Nodes that are not ready"
+
+  - name: "node_disk_pressure"
+    query: 'kube_node_status_condition{condition="DiskPressure", status="true"}'
+    description: "Nodes with disk pressure"
+
+  - name: "node_memory_pressure"
+    query: 'kube_node_status_condition{condition="MemoryPressure", status="true"}'
+    description: "Nodes with memory pressure"
+
+  - name: "node_pid_pressure"
+    query: 'kube_node_status_condition{condition="PIDPressure", status="true"}'
+    description: "Nodes with PID pressure"
+
+  - name: "node_network_unavailable"
+    query: 'kube_node_status_condition{condition="NetworkUnavailable", status="true"}'
+    description: "Nodes with network unavailable"
+
+  - name: "pods_per_node"
+    query: "sum(kube_pod_info) by (node)"
+    description: "Number of pods per node"
+
+hpa:
+  - name: "hpa_current_replicas"
+    query: 'kube_horizontalpodautoscaler_status_current_replicas{namespace="{{namespace}}"}'
+    description: "Current HPA replicas"
+
+  - name: "hpa_desired_replicas"
+    query: 'kube_horizontalpodautoscaler_status_desired_replicas{namespace="{{namespace}}"}'
+    description: "Desired HPA replicas"
+
+  - name: "hpa_max_replicas"
+    query: 'kube_horizontalpodautoscaler_spec_max_replicas{namespace="{{namespace}}"}'
+    description: "Max HPA replicas"
+
+  - name: "hpa_min_replicas"
+    query: 'kube_horizontalpodautoscaler_spec_min_replicas{namespace="{{namespace}}"}'
+    description: "Min HPA replicas"
+
+  - name: "hpa_at_max"
+    query: 'kube_horizontalpodautoscaler_status_current_replicas{namespace="{{namespace}}"} == kube_horizontalpodautoscaler_spec_max_replicas{namespace="{{namespace}}"}'
+    description: "HPAs at maximum capacity"
+
+  - name: "hpa_cpu_utilization"
+    query: 'kube_horizontalpodautoscaler_status_current_metrics_average_utilization{namespace="{{namespace}}", metric_name="cpu"}'
+    description: "Current CPU utilization for HPA"
+
+deployment:
+  - name: "deployment_replicas_available"
+    query: 'kube_deployment_status_replicas_available{namespace="{{namespace}}", deployment="{{deployment}}"}'
+    description: "Available replicas"
+
+  - name: "deployment_replicas_unavailable"
+    query: 'kube_deployment_status_replicas_unavailable{namespace="{{namespace}}", deployment="{{deployment}}"}'
+    description: "Unavailable replicas"
+
+  - name: "deployment_replicas_updated"
+    query: 'kube_deployment_status_replicas_updated{namespace="{{namespace}}", deployment="{{deployment}}"}'
+    description: "Updated replicas"
+
+  - name: "deployment_generation_mismatch"
+    query: 'kube_deployment_status_observed_generation{namespace="{{namespace}}"} != kube_deployment_metadata_generation{namespace="{{namespace}}"}'
+    description: "Deployments with generation mismatch"
+
+network:
+  - name: "network_receive_errors"
+    query: 'sum(rate(container_network_receive_errors_total{namespace="{{namespace}}"}[5m])) by (pod)'
+    description: "Network receive errors per pod"
+
+  - name: "network_transmit_errors"
+    query: 'sum(rate(container_network_transmit_errors_total{namespace="{{namespace}}"}[5m])) by (pod)'
+    description: "Network transmit errors per pod"
+
+  - name: "network_dropped_packets"
+    query: 'sum(rate(container_network_receive_packets_dropped_total{namespace="{{namespace}}"}[5m])) by (pod)'
+    description: "Dropped network packets"
+
+service_mesh:
+  - name: "istio_request_duration"
+    query: 'histogram_quantile(0.99, sum(rate(istio_request_duration_milliseconds_bucket{destination_service_namespace="{{namespace}}"}[5m])) by (le, destination_service_name))'
+    description: "Istio service mesh P99 latency"
+
+  - name: "istio_request_errors"
+    query: 'sum(rate(istio_requests_total{destination_service_namespace="{{namespace}}", response_code=~"5.."}[5m])) by (destination_service_name)'
+    description: "Istio 5xx errors by service"
