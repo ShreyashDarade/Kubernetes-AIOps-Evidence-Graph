@@ -2,19 +2,19 @@
 PostgreSQL database connection and session management.
 Uses SQLAlchemy async with asyncpg driver.
 """
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+
 import structlog
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import text
 
 from src.config import settings
-
 
 logger = structlog.get_logger()
 

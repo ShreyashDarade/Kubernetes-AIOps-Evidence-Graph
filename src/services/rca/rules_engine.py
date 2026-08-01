@@ -2,12 +2,11 @@
 Rules Engine for deterministic RCA hypothesis generation.
 Matches evidence patterns to known issue patterns.
 """
-from typing import Any
-import structlog
 from uuid import uuid4
 
-from src.models import Incident, Hypothesis, HypothesisCategory, HypothesisSource
+import structlog
 
+from src.models import HypothesisCategory, HypothesisSource, Incident
 
 logger = structlog.get_logger()
 
@@ -174,7 +173,7 @@ DIAGNOSIS_RULES = [
         "id": "network_error",
         "name": "Network Connectivity Issue",
         "conditions": [
-            {"type": "log_pattern", "patterns": ["connection refused", "connection reset", "timeout"]},
+            {"type": "log_pattern", "patterns": ["network", "connection"]},
             {"type": "network_errors_high", "threshold": 10},
         ],
         "category": HypothesisCategory.NETWORK_ISSUE,
@@ -193,50 +192,50 @@ DIAGNOSIS_RULES = [
 
 class RulesEngine:
     """Deterministic rules engine for RCA hypothesis generation."""
-    
+
     def __init__(self):
         self.rules = DIAGNOSIS_RULES
-    
-    def generate_hypotheses(
+
+    async def generate_hypotheses(
         self,
         incident: Incident,
         evidence: list[dict],
     ) -> list[dict]:
         """Generate hypotheses by matching evidence against rules."""
         hypotheses = []
-        
+
         signals = self._extract_signals(evidence)
-        
+
         logger.debug(
             "Extracted signals",
             incident_id=str(incident.id),
             signals=list(signals.keys()),
         )
-        
+
         for rule in self.rules:
             match_result = self._match_rule(rule, signals)
-            
+
             if match_result["matched"]:
                 hypothesis = self._create_hypothesis(incident, rule, match_result)
                 hypotheses.append(hypothesis)
-                
+
                 logger.info(
                     "Rule matched",
                     rule_id=rule["id"],
                     confidence=hypothesis["confidence"],
                 )
-        
+
         hypotheses.sort(key=lambda x: x["confidence"], reverse=True)
-        
+
         if not hypotheses:
             hypotheses.append(self._create_unknown_hypothesis(incident, signals))
-        
+
         return hypotheses
-    
+
     def _create_hypothesis(
-        self, 
-        incident: Incident, 
-        rule: dict, 
+        self,
+        incident: Incident,
+        rule: dict,
         match_result: dict
     ) -> dict:
         """Create a hypothesis from a matched rule."""
@@ -245,7 +244,7 @@ class RulesEngine:
             match_result["match_count"],
             match_result["evidence_strength"],
         )
-        
+
         return {
             "id": str(uuid4()),
             "incident_id": str(incident.id),
@@ -261,16 +260,16 @@ class RulesEngine:
             "support_count": match_result["match_count"],
             "signal_strength": match_result["evidence_strength"],
         }
-    
+
     def _extract_signals(self, evidence: list[dict]) -> dict:
         """Extract signals from evidence for rule matching."""
         signals = self._init_signals()
-        
+
         for ev in evidence:
             self._process_evidence_item(ev, signals)
-        
+
         return signals
-    
+
     def _init_signals(self) -> dict:
         """Initialize empty signals dict."""
         return {
@@ -287,16 +286,19 @@ class RulesEngine:
             "error_count": 0,
             "latency_high": False,
             "evidence_ids": [],
+            "pods_by_node": {},
+            "not_ready_pods": 0,
+            "readiness_probe_failures": 0,
         }
-    
+
     def _process_evidence_item(self, ev: dict, signals: dict) -> None:
         """Process a single evidence item and update signals."""
         ev_id = ev.get("id")
         ev_type = ev.get("evidence_type")
         data = ev.get("data", {})
-        
+
         signals["evidence_ids"].append(ev_id)
-        
+
         processors = {
             "kubernetes_pod": self._process_pod_evidence,
             "deploy_change": self._process_deploy_evidence,
@@ -305,11 +307,11 @@ class RulesEngine:
             "metric_signal": self._process_metric_evidence,
             "kubernetes_node": self._process_node_evidence,
         }
-        
+
         processor = processors.get(ev_type)
         if processor:
             processor(data, signals)
-    
+
     def _process_pod_evidence(self, data: dict, signals: dict) -> None:
         """Process pod evidence."""
         if data.get("waiting_reason"):
@@ -317,70 +319,87 @@ class RulesEngine:
         if data.get("terminated_reason"):
             signals["terminated_reasons"].add(data["terminated_reason"])
         signals["restart_count"] = max(signals["restart_count"], data.get("restart_count", 0))
-    
+
+        node_name = data.get("node_name")
+        has_issue = bool(
+            data.get("waiting_reason")
+            or data.get("terminated_reason")
+            or data.get("restart_count", 0) > 0
+        )
+        if node_name and has_issue:
+            signals["pods_by_node"][node_name] = signals["pods_by_node"].get(node_name, 0) + 1
+
+        ready_condition = next(
+            (c for c in data.get("conditions", []) if c.get("type") == "Ready"), None
+        )
+        if ready_condition and ready_condition.get("status") != "True" and data.get("phase") == "Running":
+            signals["not_ready_pods"] += 1
+            if ready_condition.get("reason") == "ContainersNotReady":
+                signals["readiness_probe_failures"] += 1
+
     def _process_deploy_evidence(self, data: dict, signals: dict) -> None:
         """Process deploy change evidence."""
         if data.get("is_recent_change"):
             signals["has_recent_deploy"] = True
-    
+
     def _process_image_evidence(self, data: dict, signals: dict) -> None:
         """Process image change evidence."""
         if data.get("image_changed"):
             signals["has_image_change"] = True
-    
+
     def _process_log_evidence(self, data: dict, signals: dict) -> None:
         """Process log signal evidence."""
         for pattern in data.get("patterns_found", []):
             signals["log_patterns"].add(pattern)
         signals["error_count"] += data.get("error_count", 0)
-    
+
     def _process_metric_evidence(self, data: dict, signals: dict) -> None:
         """Process metric signal evidence."""
         query_name = data.get("query_name", "")
-        
+
         if "memory" in query_name and data.get("is_anomalous"):
             current = data.get("current_value")
             if current and current > 90:
                 signals["memory_usage_high"] = True
-        
+
         if "hpa" in query_name and "max" in query_name and data.get("current_value") == 1:
             signals["hpa_at_max"] = True
-        
+
         if "latency" in query_name and data.get("current_value", 0) > 1:
             signals["latency_high"] = True
-    
+
     def _process_node_evidence(self, data: dict, signals: dict) -> None:
         """Process node evidence."""
         node_name = data.get("name")
         ready_status = data.get("conditions", {}).get("Ready", {}).get("status")
         if ready_status != "True":
             signals["node_issues"][node_name] = data.get("conditions", {})
-    
+
     def _match_rule(self, rule: dict, signals: dict) -> dict:
         """Check if a rule matches the current signals."""
         matched_conditions = 0
         total_conditions = len(rule["conditions"])
         evidence_strength = 0.0
-        
+
         for condition in rule["conditions"]:
             result = self._check_condition(condition, signals)
             if result["matched"]:
                 matched_conditions += 1
                 evidence_strength += result["strength"]
-        
+
         matched = matched_conditions == total_conditions and total_conditions > 0
-        
+
         return {
             "matched": matched,
             "match_count": matched_conditions,
             "evidence_ids": signals["evidence_ids"][:5],
             "evidence_strength": evidence_strength / max(total_conditions, 1),
         }
-    
+
     def _check_condition(self, condition: dict, signals: dict) -> dict:
         """Check a single condition against signals."""
         cond_type = condition["type"]
-        
+
         checks = {
             "waiting_reason": (
                 lambda: bool(signals["waiting_reasons"] & set(condition.get("values", []))),
@@ -400,15 +419,27 @@ class RulesEngine:
                 0.65
             ),
             "node_unhealthy": (lambda: bool(signals["node_issues"]), 0.8),
+            "multiple_pods_same_node": (
+                lambda: bool(signals["pods_by_node"])
+                and max(signals["pods_by_node"].values()) >= condition.get("threshold", 2),
+                0.75
+            ),
+            "pod_not_ready": (lambda: signals["not_ready_pods"] > 0, 0.6),
+            "readiness_probe_failing": (lambda: signals["readiness_probe_failures"] > 0, 0.75),
+            "network_errors_high": (
+                lambda: signals["error_count"] >= condition.get("threshold", 10)
+                and "network" in signals["log_patterns"],
+                0.7
+            ),
         }
-        
+
         if cond_type in checks:
             check_fn, strength = checks[cond_type]
             if check_fn():
                 return {"matched": True, "strength": strength}
-        
+
         return {"matched": False, "strength": 0.0}
-    
+
     def _calculate_confidence(
         self,
         base_confidence: float,
@@ -417,12 +448,12 @@ class RulesEngine:
     ) -> float:
         """Calculate final confidence score."""
         confidence = base_confidence * 0.6 + evidence_strength * 0.4
-        
+
         if match_count > 2:
             confidence = min(confidence * 1.1, 0.99)
-        
+
         return round(confidence, 3)
-    
+
     def _create_unknown_hypothesis(self, incident: Incident, signals: dict) -> dict:
         """Create a hypothesis when no rules match."""
         return {

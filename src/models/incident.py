@@ -4,9 +4,9 @@ Represents an incident triggered by alerts from Prometheus/Alertmanager/Grafana.
 """
 from datetime import datetime
 from enum import Enum
-from typing import Optional
-from pydantic import BaseModel, Field
 from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field
 
 
 class IncidentSeverity(str, Enum):
@@ -47,27 +47,27 @@ class Incident(BaseModel):
     id: UUID = Field(default_factory=uuid4, description="Unique incident identifier")
     fingerprint: str = Field(..., description="Deduplication key based on alert labels")
     title: str = Field(..., max_length=500, description="Human-readable incident title")
-    description: Optional[str] = Field(None, description="Detailed incident description")
+    description: str | None = Field(None, description="Detailed incident description")
     severity: IncidentSeverity = Field(..., description="Incident severity level")
     status: IncidentStatus = Field(default=IncidentStatus.OPEN, description="Current incident status")
     source: IncidentSource = Field(..., description="Source system that generated the alert")
-    
+
     # Kubernetes context
     cluster: str = Field(..., description="Kubernetes cluster name")
     namespace: str = Field(..., description="Kubernetes namespace")
-    service: Optional[str] = Field(None, description="Affected service name")
-    
+    service: str | None = Field(None, description="Affected service name")
+
     # Metadata
     labels: dict[str, str] = Field(default_factory=dict, description="Alert labels")
     annotations: dict[str, str] = Field(default_factory=dict, description="Alert annotations")
-    
+
     # Timestamps
     started_at: datetime = Field(..., description="When the incident started")
-    acknowledged_at: Optional[datetime] = Field(None, description="When incident was acknowledged")
-    resolved_at: Optional[datetime] = Field(None, description="When incident was resolved")
+    acknowledged_at: datetime | None = Field(None, description="When incident was acknowledged")
+    resolved_at: datetime | None = Field(None, description="When incident was resolved")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Record creation time")
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update time")
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -95,12 +95,12 @@ class IncidentCreate(BaseModel):
     """Schema for creating a new incident."""
     fingerprint: str
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     severity: IncidentSeverity
     source: IncidentSource
     cluster: str
     namespace: str
-    service: Optional[str] = None
+    service: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
     annotations: dict[str, str] = Field(default_factory=dict)
     started_at: datetime
@@ -108,12 +108,12 @@ class IncidentCreate(BaseModel):
 
 class IncidentUpdate(BaseModel):
     """Schema for updating an existing incident."""
-    title: Optional[str] = None
-    description: Optional[str] = None
-    severity: Optional[IncidentSeverity] = None
-    status: Optional[IncidentStatus] = None
-    acknowledged_at: Optional[datetime] = None
-    resolved_at: Optional[datetime] = None
+    title: str | None = None
+    description: str | None = None
+    severity: IncidentSeverity | None = None
+    status: IncidentStatus | None = None
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
 
 
 class IncidentSummary(BaseModel):
@@ -125,8 +125,8 @@ class IncidentSummary(BaseModel):
     status: IncidentStatus
     cluster: str
     namespace: str
-    service: Optional[str]
+    service: str | None
     started_at: datetime
-    
+
     class Config:
         from_attributes = True

@@ -3,27 +3,27 @@ Temporal Worker for Incident Workflows.
 Runs the workflow and activities.
 """
 import asyncio
+
 import structlog
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 from src.config import settings
-from src.services.workflow.incident_workflow import IncidentWorkflow
 from src.services.workflow.activities import (
-    collect_all_evidence,
     build_evidence_graph,
-    generate_hypotheses,
-    rank_hypotheses,
-    generate_runbook,
     calculate_blast_radius,
-    evaluate_remediation_policy,
-    request_approval,
-    execute_remediation,
-    verify_remediation,
-    create_ticket,
     close_incident,
+    collect_all_evidence,
+    create_ticket,
+    evaluate_remediation_policy,
+    execute_remediation,
+    generate_hypotheses,
+    generate_runbook,
+    rank_hypotheses,
+    request_approval,
+    verify_remediation,
 )
-
+from src.services.workflow.incident_workflow import IncidentWorkflow
 
 logger = structlog.get_logger()
 
@@ -35,10 +35,10 @@ async def run_worker():
         address=settings.temporal_address,
         task_queue=settings.temporal_task_queue,
     )
-    
+
     # Connect to Temporal
     client = await Client.connect(settings.temporal_address)
-    
+
     # Create and run worker
     worker = Worker(
         client,
@@ -59,7 +59,7 @@ async def run_worker():
             close_incident,
         ],
     )
-    
+
     logger.info("Worker started, listening for tasks")
     await worker.run()
 

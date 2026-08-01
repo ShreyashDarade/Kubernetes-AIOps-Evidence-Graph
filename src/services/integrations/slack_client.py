@@ -1,23 +1,22 @@
 """
 Slack Client for ChatOps approvals.
 """
-from datetime import datetime
-from typing import Any, Optional
+from typing import Any
+
 import structlog
 
 from src.config import settings
-
 
 logger = structlog.get_logger()
 
 
 class SlackClient:
     """Slack integration for approval workflows."""
-    
+
     def __init__(self):
         self.bot_token = settings.slack_bot_token
         self.channel = settings.slack_approval_channel
-    
+
     async def request_approval(
         self,
         incident: dict,
@@ -28,22 +27,22 @@ class SlackClient:
         if not self.bot_token or not self.channel:
             logger.warning("Slack not configured, auto-denying")
             return {"approved": False, "reason": "Slack not configured"}
-        
+
         try:
             from slack_sdk.web.async_client import AsyncWebClient
-            
+
             client = AsyncWebClient(token=self.bot_token)
-            
+
             blocks = self._build_approval_blocks(incident, action, blast_radius)
-            
+
             response = await client.chat_postMessage(
                 channel=self.channel,
                 text=f"🚨 Approval needed: {action} for {incident.get('title')}",
                 blocks=blocks,
             )
-            
+
             message_ts = response.get("ts")
-            
+
             # In production, we'd wait for an interactive response
             # For now, return pending
             return {
@@ -52,14 +51,14 @@ class SlackClient:
                 "message_ts": message_ts,
                 "channel": self.channel,
             }
-            
+
         except ImportError:
             logger.warning("slack_sdk not installed")
             return {"approved": False, "reason": "slack_sdk not installed"}
         except Exception as e:
             logger.error("Slack approval request failed", error=str(e))
             return {"approved": False, "reason": str(e)}
-    
+
     def _build_approval_blocks(
         self,
         incident: dict,
@@ -115,14 +114,14 @@ class SlackClient:
 
 class JiraClient:
     """Jira integration for ticket creation."""
-    
+
     def __init__(self):
         self.jira_url = settings.jira_url
         self.user = settings.jira_user
         self.token = settings.jira_api_token
         self.project = settings.jira_project_key
-    
-    def create_incident_ticket(
+
+    async def create_incident_ticket(
         self,
         incident: dict,
         hypotheses: list,
@@ -132,17 +131,17 @@ class JiraClient:
         if not self.jira_url or not self.token:
             logger.info("Jira not configured")
             return {"ticket_id": None}
-        
+
         try:
             from jira import JIRA
-            
+
             jira = JIRA(
                 server=self.jira_url,
                 basic_auth=(self.user, self.token),
             )
-            
+
             description = self._build_description(incident, hypotheses, runbook)
-            
+
             issue = jira.create_issue(
                 project=self.project,
                 summary=f"[Incident] {incident.get('title', 'Unknown Incident')}",
@@ -150,21 +149,21 @@ class JiraClient:
                 issuetype={"name": "Bug"},
                 priority={"name": self._map_severity(incident.get("severity"))},
             )
-            
+
             logger.info("Created Jira ticket", key=issue.key)
-            
+
             return {
                 "ticket_id": issue.key,
                 "ticket_url": f"{self.jira_url}/browse/{issue.key}",
             }
-            
+
         except ImportError:
             logger.warning("jira package not installed")
             return {"ticket_id": None}
         except Exception as e:
             logger.error("Jira ticket creation failed", error=str(e))
             return {"ticket_id": None, "error": str(e)}
-    
+
     def _build_description(
         self,
         incident: dict,
@@ -173,7 +172,7 @@ class JiraClient:
     ) -> str:
         """Build Jira ticket description."""
         top_hypothesis = hypotheses[0] if hypotheses else {}
-        
+
         return f"""
 h2. Incident Details
 * *Cluster:* {incident.get('cluster', 'Unknown')}
@@ -193,7 +192,7 @@ h2. Recommended Actions
 h2. Evidence
 See runbook for investigation commands and dashboard links.
 """
-    
+
     def _map_severity(self, severity: str) -> str:
         """Map incident severity to Jira priority."""
         mapping = {
