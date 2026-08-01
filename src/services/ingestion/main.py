@@ -2,27 +2,25 @@
 Alert Ingestion Service - FastAPI application for receiving alerts.
 Handles webhooks from Alertmanager, Grafana, and Prometheus.
 """
+import json
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any
+
 import structlog
-from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from starlette.responses import Response
-import hashlib
-import json
 
 from src.config import settings
-from src.database import init_database, close_database, check_database_connection
-from src.database.neo4j import Neo4jConnection, GraphService
+from src.database import check_database_connection, close_database, init_database
+from src.database.neo4j import GraphService, Neo4jConnection
 from src.models import (
-    Incident, IncidentCreate, IncidentSeverity, IncidentSource, IncidentStatus,
+    Incident,
+    IncidentCreate,
 )
-from src.services.ingestion.normalizer import AlertNormalizer
 from src.services.ingestion.deduplicator import AlertDeduplicator
-
+from src.services.ingestion.normalizer import AlertNormalizer
 
 logger = structlog.get_logger()
 
@@ -93,10 +91,10 @@ async def readiness_check():
         "postgres": await check_database_connection(),
         "neo4j": await Neo4jConnection.verify_connectivity(),
     }
-    
+
     all_healthy = all(checks.values())
     status_code = 200 if all_healthy else 503
-    
+
     return JSONResponse(
         content={"status": "ready" if all_healthy else "not_ready", "checks": checks},
         status_code=status_code,
@@ -140,48 +138,48 @@ async def alertmanager_webhook(
         try:
             payload = await request.json()
             logger.info("Received Alertmanager webhook", alert_count=len(payload.get("alerts", [])))
-            
+
             incidents = []
-            
+
             for alert in payload.get("alerts", []):
                 if alert.get("status") != "firing":
                     continue
-                
+
                 # Track metric
                 severity = alert.get("labels", {}).get("severity", "warning")
                 ALERTS_RECEIVED.labels(source="alertmanager", severity=severity).inc()
-                
+
                 # Normalize alert to incident
                 incident_data = AlertNormalizer.normalize_alertmanager(alert, payload)
-                
+
                 # Check for duplicates
                 is_duplicate, _ = await AlertDeduplicator.check_duplicate(
                     incident_data.fingerprint
                 )
-                
+
                 if is_duplicate:
                     ALERTS_DEDUPLICATED.inc()
                     logger.debug("Alert deduplicated", fingerprint=incident_data.fingerprint)
                     continue
-                
+
                 # Create incident
                 incident = await create_incident(incident_data)
                 incidents.append(incident)
-                
+
                 INCIDENTS_CREATED.labels(severity=incident.severity.value).inc()
-                
+
                 # Trigger workflow in background
                 background_tasks.add_task(
                     trigger_incident_workflow,
                     incident,
                 )
-            
+
             return {
                 "status": "accepted",
                 "incidents_created": len(incidents),
                 "incident_ids": [str(i.id) for i in incidents],
             }
-            
+
         except Exception as e:
             logger.error("Error processing Alertmanager webhook", error=str(e))
             raise HTTPException(status_code=500, detail=str(e))
@@ -209,44 +207,44 @@ async def grafana_webhook(
         try:
             payload = await request.json()
             logger.info("Received Grafana webhook", status=payload.get("status"))
-            
+
             if payload.get("status") != "firing":
                 return {"status": "ignored", "reason": "not_firing"}
-            
+
             incidents = []
-            
+
             for alert in payload.get("alerts", []):
                 if alert.get("status") != "firing":
                     continue
-                
+
                 severity = alert.get("labels", {}).get("severity", "warning")
                 ALERTS_RECEIVED.labels(source="grafana", severity=severity).inc()
-                
+
                 # Normalize
                 incident_data = AlertNormalizer.normalize_grafana(alert, payload)
-                
+
                 # Deduplicate
                 is_duplicate, _ = await AlertDeduplicator.check_duplicate(
                     incident_data.fingerprint
                 )
-                
+
                 if is_duplicate:
                     ALERTS_DEDUPLICATED.inc()
                     continue
-                
+
                 # Create incident
                 incident = await create_incident(incident_data)
                 incidents.append(incident)
-                
+
                 INCIDENTS_CREATED.labels(severity=incident.severity.value).inc()
-                
+
                 background_tasks.add_task(trigger_incident_workflow, incident)
-            
+
             return {
                 "status": "accepted",
                 "incidents_created": len(incidents),
             }
-            
+
         except Exception as e:
             logger.error("Error processing Grafana webhook", error=str(e))
             raise HTTPException(status_code=500, detail=str(e))
@@ -263,18 +261,18 @@ async def create_manual_incident(
     is_duplicate, existing_id = await AlertDeduplicator.check_duplicate(
         incident_data.fingerprint
     )
-    
+
     if is_duplicate:
         raise HTTPException(
             status_code=409,
             detail=f"Incident with fingerprint already exists: {existing_id}",
         )
-    
+
     incident = await create_incident(incident_data)
     INCIDENTS_CREATED.labels(severity=incident.severity.value).inc()
-    
+
     background_tasks.add_task(trigger_incident_workflow, incident)
-    
+
     return incident
 
 
@@ -282,19 +280,20 @@ async def create_manual_incident(
 @app.get("/api/v1/incidents/{incident_id}")
 async def get_incident(incident_id: str):
     """Get incident details by ID."""
-    from src.database import get_session
     from sqlalchemy import text
-    
+
+    from src.database import get_session
+
     async with get_session() as session:
         result = await session.execute(
             text("SELECT * FROM incidents WHERE id = :id"),
             {"id": incident_id}
         )
         row = result.fetchone()
-        
+
         if not row:
             raise HTTPException(status_code=404, detail="Incident not found")
-        
+
         return dict(row._mapping)
 
 
@@ -316,12 +315,13 @@ async def list_incidents(
     offset: int = 0,
 ):
     """List incidents with optional filters."""
-    from src.database import get_session
     from sqlalchemy import text
-    
+
+    from src.database import get_session
+
     query = "SELECT * FROM incidents WHERE 1=1"
     params = {}
-    
+
     if status:
         query += " AND status = :status"
         params["status"] = status
@@ -331,11 +331,11 @@ async def list_incidents(
     if namespace:
         query += " AND namespace = :namespace"
         params["namespace"] = namespace
-    
+
     query += " ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
     params["limit"] = limit
     params["offset"] = offset
-    
+
     async with get_session() as session:
         result = await session.execute(text(query), params)
         rows = result.fetchall()
@@ -344,9 +344,10 @@ async def list_incidents(
 
 async def create_incident(incident_data: IncidentCreate) -> Incident:
     """Create an incident in the database."""
-    from src.database import get_session
     from sqlalchemy import text
-    
+
+    from src.database import get_session
+
     incident = Incident(
         fingerprint=incident_data.fingerprint,
         title=incident_data.title,
@@ -360,7 +361,7 @@ async def create_incident(incident_data: IncidentCreate) -> Incident:
         annotations=incident_data.annotations,
         started_at=incident_data.started_at,
     )
-    
+
     async with get_session() as session:
         await session.execute(
             text("""
@@ -387,14 +388,16 @@ async def create_incident(incident_data: IncidentCreate) -> Incident:
                 "updated_at": incident.updated_at,
             }
         )
-    
+
+    await AlertDeduplicator.register_fingerprint(incident.fingerprint, str(incident.id))
+
     logger.info(
         "Created incident",
         incident_id=str(incident.id),
         title=incident.title,
         severity=incident.severity.value,
     )
-    
+
     return incident
 
 
@@ -402,16 +405,16 @@ async def trigger_incident_workflow(incident: Incident) -> None:
     """Trigger the incident workflow in Temporal."""
     try:
         from temporalio.client import Client
-        
+
         client = await Client.connect(settings.temporal_address)
-        
+
         await client.start_workflow(
             "IncidentWorkflow",
             incident.model_dump(mode="json"),
             id=f"incident-{incident.id}",
             task_queue=settings.temporal_task_queue,
         )
-        
+
         logger.info(
             "Started incident workflow",
             incident_id=str(incident.id),

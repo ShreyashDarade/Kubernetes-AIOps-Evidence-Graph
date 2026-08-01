@@ -4,9 +4,10 @@ Represents collected evidence from Kubernetes, logs, metrics, and deployments.
 """
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
-from pydantic import BaseModel, Field
+from typing import Any
 from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field
 
 
 class EvidenceType(str, Enum):
@@ -21,16 +22,16 @@ class EvidenceType(str, Enum):
     KUBERNETES_CONFIGMAP = "kubernetes_configmap"
     KUBERNETES_HPA = "kubernetes_hpa"
     KUBERNETES_PVC = "kubernetes_pvc"
-    
+
     # Signals
     LOG_SIGNAL = "log_signal"
     METRIC_SIGNAL = "metric_signal"
-    
+
     # Changes
     DEPLOY_CHANGE = "deploy_change"
     CONFIG_CHANGE = "config_change"
     IMAGE_CHANGE = "image_change"
-    
+
     # Dependencies
     DEPENDENCY_STATE = "dependency_state"
     NETWORK_TOPOLOGY = "network_topology"
@@ -66,30 +67,30 @@ class Evidence(BaseModel):
     incident_id: UUID = Field(..., description="Associated incident ID")
     evidence_type: EvidenceType = Field(..., description="Type of evidence")
     source: EvidenceSource = Field(..., description="Source system")
-    
+
     # Entity identification
     entity_name: str = Field(..., description="Name of the entity (pod, deployment, etc.)")
     entity_namespace: str = Field(..., description="Kubernetes namespace")
-    entity_uid: Optional[str] = Field(None, description="Kubernetes UID if applicable")
-    
+    entity_uid: str | None = Field(None, description="Kubernetes UID if applicable")
+
     # Evidence data
     data: dict[str, Any] = Field(..., description="Raw evidence payload")
-    summary: Optional[str] = Field(None, description="Human-readable summary")
-    
+    summary: str | None = Field(None, description="Human-readable summary")
+
     # Relevance scoring
     signal_strength: float = Field(
-        default=0.5, 
-        ge=0.0, 
-        le=1.0, 
+        default=0.5,
+        ge=0.0,
+        le=1.0,
         description="Relevance score (0-1)"
     )
     is_anomaly: bool = Field(default=False, description="Whether this is anomalous")
-    
+
     # Time context
     collected_at: datetime = Field(default_factory=datetime.utcnow)
-    time_window_start: Optional[datetime] = Field(None, description="Evidence time window start")
-    time_window_end: Optional[datetime] = Field(None, description="Evidence time window end")
-    
+    time_window_start: datetime | None = Field(None, description="Evidence time window start")
+    time_window_end: datetime | None = Field(None, description="Evidence time window end")
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -115,7 +116,7 @@ class GraphEntity(BaseModel):
     id: str = Field(..., description="Unique entity identifier")
     type: str = Field(..., description="Node label (Pod, Deployment, etc.)")
     properties: dict[str, Any] = Field(default_factory=dict, description="Node properties")
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -137,7 +138,7 @@ class GraphRelation(BaseModel):
     target_id: str = Field(..., description="Target entity ID")
     relation_type: str = Field(..., description="Relationship label")
     properties: dict[str, Any] = Field(default_factory=dict, description="Relationship properties")
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -172,8 +173,8 @@ class MetricEvidence(BaseModel):
     query: str = Field(..., description="PromQL query used")
     metric_name: str = Field(..., description="Metric name")
     data_points: list[MetricDataPoint] = Field(default_factory=list)
-    current_value: Optional[float] = None
-    threshold: Optional[float] = None
+    current_value: float | None = None
+    threshold: float | None = None
     is_above_threshold: bool = False
 
 
@@ -193,8 +194,8 @@ class DeploymentChange(BaseModel):
     deployment_name: str
     namespace: str
     change_type: str = Field(..., description="image_update, config_change, scale, rollback")
-    old_value: Optional[str] = None
-    new_value: Optional[str] = None
+    old_value: str | None = None
+    new_value: str | None = None
     changed_at: datetime
-    changed_by: Optional[str] = None
+    changed_by: str | None = None
     revision: int

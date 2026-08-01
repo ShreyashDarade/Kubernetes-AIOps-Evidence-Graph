@@ -2,32 +2,35 @@
 Kubernetes Evidence Collector.
 Collects pod, deployment, replicaset, events, node, and HPA information.
 """
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
+
 import structlog
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
+from src.config import settings
 from src.models import (
-    Evidence, EvidenceType, EvidenceSource,
-    CollectorResult, GraphEntity, GraphRelation,
+    CollectorResult,
+    Evidence,
+    EvidenceSource,
+    EvidenceType,
+    GraphEntity,
+    GraphRelation,
 )
 from src.services.collectors.base import BaseCollector
-from src.config import settings
-
 
 logger = structlog.get_logger()
 
 
 class KubernetesCollector(BaseCollector):
     """Collects evidence from Kubernetes API."""
-    
+
     name = "kubernetes"
-    
+
     def __init__(self, incident):
         super().__init__(incident)
         self._init_client()
-    
+
     def _init_client(self):
         """Initialize Kubernetes client."""
         try:
@@ -38,25 +41,25 @@ class KubernetesCollector(BaseCollector):
                     config.load_incluster_config()
                 except config.ConfigException:
                     config.load_kube_config()
-            
+
             self.core_v1 = client.CoreV1Api()
             self.apps_v1 = client.AppsV1Api()
             self.autoscaling_v1 = client.AutoscalingV1Api()
-            
+
         except Exception as e:
             logger.error("Failed to initialize Kubernetes client", error=str(e))
             raise
-    
+
     async def collect(self) -> CollectorResult:
         """Collect Kubernetes evidence."""
         evidence = []
         entities = []
         relations = []
         errors = []
-        
+
         namespace = self.incident.namespace
         service_name = self.incident.service
-        
+
         # Collect from all sources
         collectors = [
             ("pods", lambda: self._collect_pods(namespace, service_name)),
@@ -65,7 +68,7 @@ class KubernetesCollector(BaseCollector):
             ("nodes", lambda: self._collect_nodes()),
             ("hpa", lambda: self._collect_hpa(namespace)),
         ]
-        
+
         for name, collector_fn in collectors:
             try:
                 result = collector_fn()
@@ -74,10 +77,10 @@ class KubernetesCollector(BaseCollector):
                 relations.extend(result.get("relations", []))
             except Exception as e:
                 errors.append(f"{name} collection failed: {e}")
-        
+
         # Create incident entity
         entities.append(self._create_incident_entity(namespace))
-        
+
         return CollectorResult(
             collector_name=self.name,
             success=len(errors) == 0,
@@ -86,7 +89,7 @@ class KubernetesCollector(BaseCollector):
             relations=relations,
             errors=errors,
         )
-    
+
     def _create_incident_entity(self, namespace: str) -> GraphEntity:
         """Create incident graph entity."""
         return GraphEntity(
@@ -100,19 +103,19 @@ class KubernetesCollector(BaseCollector):
                 "started_at": self.incident.started_at.isoformat(),
             }
         )
-    
+
     def _collect_pods(
-        self, 
-        namespace: str, 
-        service_name: Optional[str]
+        self,
+        namespace: str,
+        service_name: str | None
     ) -> dict[str, Any]:
         """Collect pod information."""
         evidence = []
         entities = []
         relations = []
-        
+
         label_selector = f"app={service_name}" if service_name else None
-        
+
         try:
             pods = self.core_v1.list_namespaced_pod(
                 namespace=namespace,
@@ -121,32 +124,32 @@ class KubernetesCollector(BaseCollector):
         except ApiException as e:
             logger.error("Failed to list pods", error=str(e))
             return {"evidence": [], "entities": [], "relations": []}
-        
+
         for pod in pods.items:
             result = self._process_pod(pod, namespace)
             evidence.append(result["evidence"])
             entities.append(result["entity"])
             relations.extend(result["relations"])
-        
+
         return {"evidence": evidence, "entities": entities, "relations": relations}
-    
+
     def _process_pod(self, pod, namespace: str) -> dict[str, Any]:
         """Process a single pod."""
         pod_name = pod.metadata.name
         pod_uid = pod.metadata.uid
         phase = pod.status.phase
-        
+
         conditions = self._extract_pod_conditions(pod)
         container_info = self._extract_container_info(pod)
         resources = self._extract_resources(pod)
-        
+
         signal_strength = self._calculate_pod_signal_strength(
             container_info["waiting_reason"],
             container_info["terminated_reason"],
             container_info["restart_count"],
             phase
         )
-        
+
         pod_data = {
             "name": pod_name,
             "namespace": namespace,
@@ -161,9 +164,9 @@ class KubernetesCollector(BaseCollector):
             "labels": dict(pod.metadata.labels or {}),
             "created_at": pod.metadata.creation_timestamp.isoformat() if pod.metadata.creation_timestamp else None,
         }
-        
+
         summary = self._build_pod_summary(pod_name, phase, container_info)
-        
+
         ev = self.create_evidence(
             evidence_type=EvidenceType.KUBERNETES_POD.value,
             source=EvidenceSource.KUBERNETES_API.value,
@@ -172,7 +175,7 @@ class KubernetesCollector(BaseCollector):
             signal_strength=signal_strength,
             summary=summary,
         )
-        
+
         entity = GraphEntity(
             id=f"pod:{namespace}:{pod_name}",
             type="Pod",
@@ -186,11 +189,11 @@ class KubernetesCollector(BaseCollector):
                 "node_name": pod.spec.node_name,
             }
         )
-        
+
         relations = self._create_pod_relations(pod, namespace, pod_name)
-        
+
         return {"evidence": ev, "entity": entity, "relations": relations}
-    
+
     def _extract_pod_conditions(self, pod) -> list[dict]:
         """Extract pod conditions."""
         if not pod.status.conditions:
@@ -199,14 +202,14 @@ class KubernetesCollector(BaseCollector):
             {"type": c.type, "status": c.status, "reason": c.reason}
             for c in pod.status.conditions
         ]
-    
+
     def _extract_container_info(self, pod) -> dict[str, Any]:
         """Extract container status information."""
         statuses = []
         restart_count = 0
         waiting_reason = None
         terminated_reason = None
-        
+
         if not pod.status.container_statuses:
             return {
                 "statuses": statuses,
@@ -214,7 +217,7 @@ class KubernetesCollector(BaseCollector):
                 "waiting_reason": waiting_reason,
                 "terminated_reason": terminated_reason,
             }
-        
+
         for cs in pod.status.container_statuses:
             restart_count += cs.restart_count
             status_info = {
@@ -222,42 +225,42 @@ class KubernetesCollector(BaseCollector):
                 "ready": cs.ready,
                 "restart_count": cs.restart_count,
             }
-            
+
             if cs.state.waiting:
                 waiting_reason = cs.state.waiting.reason
                 status_info["waiting"] = {
                     "reason": cs.state.waiting.reason,
                     "message": cs.state.waiting.message,
                 }
-            
+
             if cs.state.terminated:
                 terminated_reason = cs.state.terminated.reason
                 status_info["terminated"] = {
                     "reason": cs.state.terminated.reason,
                     "exit_code": cs.state.terminated.exit_code,
                 }
-            
+
             if cs.last_state and cs.last_state.terminated:
                 status_info["last_terminated"] = {
                     "reason": cs.last_state.terminated.reason,
                     "exit_code": cs.last_state.terminated.exit_code,
                 }
-            
+
             statuses.append(status_info)
-        
+
         return {
             "statuses": statuses,
             "restart_count": restart_count,
             "waiting_reason": waiting_reason,
             "terminated_reason": terminated_reason,
         }
-    
+
     def _extract_resources(self, pod) -> dict:
         """Extract resource info from pod."""
         resources = {}
         if not pod.spec.containers:
             return resources
-        
+
         for container in pod.spec.containers:
             if container.resources:
                 resources[container.name] = {
@@ -265,11 +268,11 @@ class KubernetesCollector(BaseCollector):
                     "limits": container.resources.limits,
                 }
         return resources
-    
+
     def _calculate_pod_signal_strength(
         self,
-        waiting_reason: Optional[str],
-        terminated_reason: Optional[str],
+        waiting_reason: str | None,
+        terminated_reason: str | None,
         restart_count: int,
         phase: str
     ) -> float:
@@ -283,7 +286,7 @@ class KubernetesCollector(BaseCollector):
         if phase != "Running":
             return 0.7
         return 0.3
-    
+
     def _build_pod_summary(self, pod_name: str, phase: str, container_info: dict) -> str:
         """Build summary string for pod."""
         summary = f"Pod {pod_name}: {phase}"
@@ -292,63 +295,63 @@ class KubernetesCollector(BaseCollector):
         if container_info["restart_count"] > 0:
             summary += f", {container_info['restart_count']} restarts"
         return summary
-    
+
     def _create_pod_relations(self, pod, namespace: str, pod_name: str) -> list[GraphRelation]:
         """Create graph relations for pod."""
         relations = []
-        
+
         if pod.spec.node_name:
             relations.append(GraphRelation(
                 source_id=f"pod:{namespace}:{pod_name}",
                 target_id=f"node:{pod.spec.node_name}",
                 relation_type="SCHEDULED_ON",
             ))
-        
+
         relations.append(GraphRelation(
             source_id=f"incident:{self.incident.id}",
             target_id=f"pod:{namespace}:{pod_name}",
             relation_type="AFFECTS",
         ))
-        
+
         return relations
-    
+
     def _collect_deployments(
-        self, 
+        self,
         namespace: str,
-        service_name: Optional[str]
+        service_name: str | None
     ) -> dict[str, Any]:
         """Collect deployment information."""
         evidence = []
         entities = []
         relations = []
-        
+
         try:
             deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
         except ApiException as e:
             logger.error("Failed to list deployments", error=str(e))
             return {"evidence": [], "entities": [], "relations": []}
-        
+
         for deploy in deployments.items:
             if service_name and service_name not in deploy.metadata.name:
                 continue
-            
+
             result = self._process_deployment(deploy, namespace)
             evidence.append(result["evidence"])
             entities.append(result["entity"])
-        
+
         return {"evidence": evidence, "entities": entities, "relations": relations}
-    
+
     def _process_deployment(self, deploy, namespace: str) -> dict[str, Any]:
         """Process a single deployment."""
         deploy_name = deploy.metadata.name
-        
+
         replicas = deploy.status.replicas or 0
         ready_replicas = deploy.status.ready_replicas or 0
         unavailable_replicas = deploy.status.unavailable_replicas or 0
-        
+
         conditions = self._extract_deploy_conditions(deploy)
         images = [c.image for c in deploy.spec.template.spec.containers] if deploy.spec.template.spec.containers else []
-        
+
         deploy_data = {
             "name": deploy_name,
             "namespace": namespace,
@@ -362,15 +365,15 @@ class KubernetesCollector(BaseCollector):
             "observed_generation": deploy.status.observed_generation,
             "strategy": deploy.spec.strategy.type if deploy.spec.strategy else None,
         }
-        
+
         signal_strength = self._calculate_deploy_signal_strength(
             unavailable_replicas, ready_replicas, replicas
         )
-        
+
         summary = f"Deployment {deploy_name}: {ready_replicas}/{replicas} ready"
         if unavailable_replicas > 0:
             summary += f", {unavailable_replicas} unavailable"
-        
+
         ev = self.create_evidence(
             evidence_type=EvidenceType.KUBERNETES_DEPLOYMENT.value,
             source=EvidenceSource.KUBERNETES_API.value,
@@ -379,7 +382,7 @@ class KubernetesCollector(BaseCollector):
             signal_strength=signal_strength,
             summary=summary,
         )
-        
+
         entity = GraphEntity(
             id=f"deployment:{namespace}:{deploy_name}",
             type="Deployment",
@@ -391,9 +394,9 @@ class KubernetesCollector(BaseCollector):
                 "unavailable_replicas": unavailable_replicas,
             }
         )
-        
+
         return {"evidence": ev, "entity": entity}
-    
+
     def _extract_deploy_conditions(self, deploy) -> list[dict]:
         """Extract deployment conditions."""
         if not deploy.status.conditions:
@@ -402,7 +405,7 @@ class KubernetesCollector(BaseCollector):
             {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
             for c in deploy.status.conditions
         ]
-    
+
     def _calculate_deploy_signal_strength(
         self,
         unavailable_replicas: int,
@@ -415,38 +418,38 @@ class KubernetesCollector(BaseCollector):
         if ready_replicas < replicas:
             return 0.7
         return 0.3
-    
+
     def _collect_events(self, namespace: str) -> dict[str, Any]:
         """Collect Kubernetes events."""
         evidence = []
         entities = []
-        
+
         try:
             events = self.core_v1.list_namespaced_event(namespace=namespace, limit=100)
         except ApiException as e:
             logger.error("Failed to list events", error=str(e))
             return {"evidence": [], "entities": []}
-        
+
         for event in events.items:
             ev = self._process_event(event)
             if ev:
                 evidence.append(ev)
-        
+
         return {"evidence": evidence, "entities": entities}
-    
-    def _process_event(self, event) -> Optional[Evidence]:
+
+    def _process_event(self, event) -> Evidence | None:
         """Process a single event."""
         event_time = event.last_timestamp or event.event_time
         if not event_time:
             return None
-        
+
         start_time = self.start_time.replace(tzinfo=None) if self.start_time.tzinfo else self.start_time
         if event_time.replace(tzinfo=None) < start_time:
             return None
-        
+
         if event.type not in ["Warning", "Normal"]:
             return None
-        
+
         event_data = {
             "type": event.type,
             "reason": event.reason,
@@ -460,10 +463,10 @@ class KubernetesCollector(BaseCollector):
             "first_timestamp": event.first_timestamp.isoformat() if event.first_timestamp else None,
             "last_timestamp": event_time.isoformat(),
         }
-        
+
         signal_strength = self._calculate_event_signal_strength(event)
         summary = f"Event: {event.reason} - {event.message[:100]}"
-        
+
         return self.create_evidence(
             evidence_type=EvidenceType.KUBERNETES_EVENT.value,
             source=EvidenceSource.KUBERNETES_API.value,
@@ -472,7 +475,7 @@ class KubernetesCollector(BaseCollector):
             signal_strength=signal_strength,
             summary=summary,
         )
-    
+
     def _calculate_event_signal_strength(self, event) -> float:
         """Calculate signal strength for event."""
         if event.type != "Warning":
@@ -480,36 +483,36 @@ class KubernetesCollector(BaseCollector):
         if event.reason in ["FailedScheduling", "FailedMount", "BackOff", "Unhealthy", "Failed"]:
             return 0.9
         return 0.7
-    
+
     def _collect_nodes(self) -> dict[str, Any]:
         """Collect node information."""
         evidence = []
         entities = []
         relations = []
-        
+
         try:
             nodes = self.core_v1.list_node()
         except ApiException as e:
             logger.error("Failed to list nodes", error=str(e))
             return {"evidence": [], "entities": [], "relations": []}
-        
+
         for node in nodes.items:
             result = self._process_node(node)
             if result:
                 evidence.append(result["evidence"])
                 entities.append(result["entity"])
-        
+
         return {"evidence": evidence, "entities": entities, "relations": relations}
-    
-    def _process_node(self, node) -> Optional[dict[str, Any]]:
+
+    def _process_node(self, node) -> dict[str, Any] | None:
         """Process a single node."""
         node_name = node.metadata.name
         conditions, is_healthy = self._extract_node_conditions(node)
-        
+
         # Only include unhealthy nodes
         if is_healthy:
             return None
-        
+
         node_data = {
             "name": node_name,
             "conditions": conditions,
@@ -520,7 +523,7 @@ class KubernetesCollector(BaseCollector):
                 "kubelet_version": node.status.node_info.kubelet_version if node.status.node_info else None,
             }
         }
-        
+
         ev = self.create_evidence(
             evidence_type=EvidenceType.KUBERNETES_NODE.value,
             source=EvidenceSource.KUBERNETES_API.value,
@@ -529,20 +532,20 @@ class KubernetesCollector(BaseCollector):
             signal_strength=0.9,
             summary=f"Node {node_name}: unhealthy",
         )
-        
+
         entity = GraphEntity(
             id=f"node:{node_name}",
             type="Node",
             properties={"name": node_name, "ready": False}
         )
-        
+
         return {"evidence": ev, "entity": entity}
-    
+
     def _extract_node_conditions(self, node) -> tuple[dict, bool]:
         """Extract node conditions and check health."""
         conditions = {}
         is_healthy = True
-        
+
         for condition in node.status.conditions or []:
             conditions[condition.type] = {
                 "status": condition.status,
@@ -553,33 +556,33 @@ class KubernetesCollector(BaseCollector):
                 is_healthy = False
             if condition.type in ["MemoryPressure", "DiskPressure", "PIDPressure"] and condition.status == "True":
                 is_healthy = False
-        
+
         return conditions, is_healthy
-    
+
     def _collect_hpa(self, namespace: str) -> dict[str, Any]:
         """Collect HPA information."""
         evidence = []
         entities = []
-        
+
         try:
             hpas = self.autoscaling_v1.list_namespaced_horizontal_pod_autoscaler(namespace=namespace)
         except ApiException as e:
             logger.error("Failed to list HPAs", error=str(e))
             return {"evidence": [], "entities": []}
-        
+
         for hpa in hpas.items:
             result = self._process_hpa(hpa, namespace)
             evidence.append(result["evidence"])
             entities.append(result["entity"])
-        
+
         return {"evidence": evidence, "entities": entities}
-    
+
     def _process_hpa(self, hpa, namespace: str) -> dict[str, Any]:
         """Process a single HPA."""
         hpa_name = hpa.metadata.name
         current_replicas = hpa.status.current_replicas or 0
         max_replicas = hpa.spec.max_replicas
-        
+
         hpa_data = {
             "name": hpa_name,
             "namespace": namespace,
@@ -594,14 +597,14 @@ class KubernetesCollector(BaseCollector):
             "current_cpu_utilization": hpa.status.current_cpu_utilization_percentage,
             "target_cpu_utilization": hpa.spec.target_cpu_utilization_percentage,
         }
-        
+
         at_max = current_replicas >= max_replicas
         signal_strength = 0.8 if at_max else 0.3
-        
+
         summary = f"HPA {hpa_name}: {current_replicas}/{max_replicas} replicas"
         if at_max:
             summary += " (at max!)"
-        
+
         ev = self.create_evidence(
             evidence_type=EvidenceType.KUBERNETES_HPA.value,
             source=EvidenceSource.KUBERNETES_API.value,
@@ -610,7 +613,7 @@ class KubernetesCollector(BaseCollector):
             signal_strength=signal_strength,
             summary=summary,
         )
-        
+
         entity = GraphEntity(
             id=f"hpa:{namespace}:{hpa_name}",
             type="HPA",
@@ -621,5 +624,5 @@ class KubernetesCollector(BaseCollector):
                 "at_max": at_max,
             }
         )
-        
+
         return {"evidence": ev, "entity": entity}

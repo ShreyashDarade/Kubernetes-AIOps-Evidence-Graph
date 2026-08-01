@@ -2,12 +2,10 @@
 Incident Simulator.
 Creates test incidents by deploying faulty apps to Kubernetes.
 """
-import click
-import asyncio
-import structlog
-from datetime import datetime
-from kubernetes import client, config
 
+import click
+import structlog
+from kubernetes import client, config
 
 logger = structlog.get_logger()
 
@@ -162,14 +160,14 @@ spec:
 
 class IncidentSimulator:
     """Creates test incidents in Kubernetes."""
-    
+
     SCENARIOS = {
         "crashloop": CRASHLOOP_MANIFEST,
         "oom": OOM_MANIFEST,
         "imagepull": IMAGE_PULL_MANIFEST,
         "slowapp": SLOW_APP_MANIFEST,
     }
-    
+
     def __init__(self, kubeconfig: str = None):
         if kubeconfig:
             config.load_kube_config(kubeconfig)
@@ -178,28 +176,28 @@ class IncidentSimulator:
                 config.load_incluster_config()
             except config.ConfigException:
                 config.load_kube_config()
-        
+
         self.apps_v1 = client.AppsV1Api()
         self.core_v1 = client.CoreV1Api()
-    
+
     def create_scenario(self, scenario: str, namespace: str = "default") -> bool:
         """Create a test scenario."""
         if scenario not in self.SCENARIOS:
             logger.error(f"Unknown scenario: {scenario}")
             return False
-        
+
         manifest = self.SCENARIOS[scenario].format(namespace=namespace)
-        
+
         try:
             # Parse and create resources
             import yaml
-            
+
             for doc in yaml.safe_load_all(manifest):
                 if doc is None:
                     continue
-                
+
                 kind = doc.get("kind")
-                
+
                 if kind == "Deployment":
                     try:
                         self.apps_v1.delete_namespaced_deployment(
@@ -208,13 +206,13 @@ class IncidentSimulator:
                         )
                     except client.ApiException:
                         pass
-                    
+
                     self.apps_v1.create_namespaced_deployment(
                         namespace=namespace,
                         body=doc,
                     )
                     logger.info(f"Created deployment: {doc['metadata']['name']}")
-                    
+
                 elif kind == "Service":
                     try:
                         self.core_v1.delete_namespaced_service(
@@ -223,19 +221,19 @@ class IncidentSimulator:
                         )
                     except client.ApiException:
                         pass
-                    
+
                     self.core_v1.create_namespaced_service(
                         namespace=namespace,
                         body=doc,
                     )
                     logger.info(f"Created service: {doc['metadata']['name']}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error("Failed to create scenario", error=str(e))
             return False
-    
+
     def cleanup(self, namespace: str = "default") -> None:
         """Clean up all simulator resources."""
         try:
@@ -243,29 +241,29 @@ class IncidentSimulator:
                 namespace=namespace,
                 label_selector="simulator=aiops-test",
             )
-            
+
             for deploy in deployments.items:
                 self.apps_v1.delete_namespaced_deployment(
                     name=deploy.metadata.name,
                     namespace=namespace,
                 )
                 logger.info(f"Deleted deployment: {deploy.metadata.name}")
-            
+
             services = self.core_v1.list_namespaced_service(
                 namespace=namespace,
                 label_selector="simulator=aiops-test",
             )
-            
+
             for svc in services.items:
                 self.core_v1.delete_namespaced_service(
                     name=svc.metadata.name,
                     namespace=namespace,
                 )
                 logger.info(f"Deleted service: {svc.metadata.name}")
-                
+
         except Exception as e:
             logger.error("Cleanup failed", error=str(e))
-    
+
     def list_scenarios(self) -> list[str]:
         """List available scenarios."""
         return list(self.SCENARIOS.keys())
@@ -284,13 +282,13 @@ def cli():
 def create(scenario: str, namespace: str, kubeconfig: str):
     """Create a test incident scenario."""
     simulator = IncidentSimulator(kubeconfig)
-    
+
     if scenario == "all":
         for s in simulator.list_scenarios():
             simulator.create_scenario(s, namespace)
     else:
         simulator.create_scenario(scenario, namespace)
-    
+
     click.echo(f"✅ Created scenario: {scenario} in namespace: {namespace}")
     click.echo("Watch for alerts in your monitoring system...")
 

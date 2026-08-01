@@ -1,20 +1,20 @@
 """
 Alert normalizer - converts various alert formats to standard Incident schema.
 """
-from datetime import datetime, timezone
-from typing import Any
 import hashlib
+from datetime import UTC, datetime
+from typing import Any
+
 import structlog
 
 from src.models import IncidentCreate, IncidentSeverity, IncidentSource
-
 
 logger = structlog.get_logger()
 
 
 class AlertNormalizer:
     """Normalizes alerts from different sources to a standard format."""
-    
+
     # Severity mapping
     SEVERITY_MAP = {
         # Alertmanager/Prometheus
@@ -28,10 +28,10 @@ class AlertNormalizer:
         "error": IncidentSeverity.HIGH,
         "warn": IncidentSeverity.MEDIUM,
     }
-    
+
     @classmethod
     def normalize_alertmanager(
-        cls, 
+        cls,
         alert: dict[str, Any],
         payload: dict[str, Any],
     ) -> IncidentCreate:
@@ -44,18 +44,18 @@ class AlertNormalizer:
         """
         labels = alert.get("labels", {})
         annotations = alert.get("annotations", {})
-        
+
         # Extract key fields
         alertname = labels.get("alertname", "Unknown Alert")
         namespace = labels.get("namespace", "default")
         cluster = labels.get("cluster") or labels.get("kubernetes_cluster") or "default-cluster"
         service = labels.get("service") or labels.get("job") or labels.get("deployment")
         pod = labels.get("pod")
-        
+
         # Determine severity
         severity_str = labels.get("severity", "warning").lower()
         severity = cls.SEVERITY_MAP.get(severity_str, IncidentSeverity.MEDIUM)
-        
+
         # Build title
         if pod:
             title = f"{alertname}: {pod}"
@@ -63,10 +63,10 @@ class AlertNormalizer:
             title = f"{alertname}: {service}"
         else:
             title = alertname
-        
+
         # Description from annotations
         description = annotations.get("description") or annotations.get("summary") or ""
-        
+
         # Parse start time
         starts_at_str = alert.get("startsAt")
         if starts_at_str:
@@ -75,10 +75,10 @@ class AlertNormalizer:
             try:
                 started_at = datetime.fromisoformat(starts_at_str)
             except ValueError:
-                started_at = datetime.now(timezone.utc)
+                started_at = datetime.now(UTC)
         else:
-            started_at = datetime.now(timezone.utc)
-        
+            started_at = datetime.now(UTC)
+
         # Generate fingerprint for deduplication
         fingerprint = cls._generate_fingerprint(
             source="alertmanager",
@@ -86,7 +86,7 @@ class AlertNormalizer:
             namespace=namespace,
             service=service or pod or "",
         )
-        
+
         return IncidentCreate(
             fingerprint=fingerprint,
             title=title,
@@ -100,7 +100,7 @@ class AlertNormalizer:
             annotations=annotations,
             started_at=started_at,
         )
-    
+
     @classmethod
     def normalize_grafana(
         cls,
@@ -116,25 +116,25 @@ class AlertNormalizer:
         """
         labels = alert.get("labels", {})
         annotations = alert.get("annotations", {})
-        
+
         # Merge common labels/annotations
         labels = {**payload.get("commonLabels", {}), **labels}
         annotations = {**payload.get("commonAnnotations", {}), **annotations}
-        
+
         # Extract key fields
         alertname = labels.get("alertname") or alert.get("alertname", "Grafana Alert")
         namespace = labels.get("namespace", "default")
         cluster = labels.get("cluster", "default-cluster")
         service = labels.get("service") or labels.get("grafana_folder")
-        
+
         # Severity
         severity_str = labels.get("severity", "warning").lower()
         severity = cls.SEVERITY_MAP.get(severity_str, IncidentSeverity.MEDIUM)
-        
+
         # Title and description
         title = annotations.get("summary") or alertname
         description = annotations.get("description", "")
-        
+
         # Start time
         starts_at_str = alert.get("startsAt")
         if starts_at_str:
@@ -142,17 +142,17 @@ class AlertNormalizer:
             try:
                 started_at = datetime.fromisoformat(starts_at_str)
             except ValueError:
-                started_at = datetime.now(timezone.utc)
+                started_at = datetime.now(UTC)
         else:
-            started_at = datetime.now(timezone.utc)
-        
+            started_at = datetime.now(UTC)
+
         fingerprint = cls._generate_fingerprint(
             source="grafana",
             alertname=alertname,
             namespace=namespace,
             service=service or "",
         )
-        
+
         return IncidentCreate(
             fingerprint=fingerprint,
             title=title,
@@ -166,7 +166,7 @@ class AlertNormalizer:
             annotations=annotations,
             started_at=started_at,
         )
-    
+
     @classmethod
     def normalize_prometheus(
         cls,
@@ -175,22 +175,22 @@ class AlertNormalizer:
         """Normalize raw Prometheus alert."""
         labels = alert.get("labels", {})
         annotations = alert.get("annotations", {})
-        
+
         alertname = labels.get("alertname", "Prometheus Alert")
         namespace = labels.get("namespace", "default")
         cluster = labels.get("cluster", "default-cluster")
         service = labels.get("service") or labels.get("instance")
-        
+
         severity_str = labels.get("severity", "warning").lower()
         severity = cls.SEVERITY_MAP.get(severity_str, IncidentSeverity.MEDIUM)
-        
+
         fingerprint = cls._generate_fingerprint(
             source="prometheus",
             alertname=alertname,
             namespace=namespace,
             service=service or "",
         )
-        
+
         return IncidentCreate(
             fingerprint=fingerprint,
             title=alertname,
@@ -202,9 +202,9 @@ class AlertNormalizer:
             service=service,
             labels=labels,
             annotations=annotations,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
-    
+
     @classmethod
     def _generate_fingerprint(
         cls,
